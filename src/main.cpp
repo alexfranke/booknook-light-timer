@@ -1,4 +1,4 @@
-// Project: BookNook Light Timer (v2)
+// Project: BookNook Light Timer (v1-260210)
 // Author: Alex Franke (CodeCreations), http://www.theFrankes.com
 // Date: February 2026
 // License: CC-BY-NC-SA 4.0 https://creativecommons.org/licenses/by-nc-sa/4.0/deed.en
@@ -14,7 +14,7 @@
 #include <util/delay.h>
 
 // Description: 
-// This project replaces a simple but energy innefficient touch-activated LED circuit in a 
+// This project replaces a simple but energy inefficient touch-activated LED circuit in a 
 // bookshelf book nook with a more sophisticated design that incorporates an ATTiny85 
 // microcontroller. The new design allows for adjustable timer settings via DIP switches, 
 // enabling the user to set how long the LED stays on after being activated by the touch 
@@ -35,12 +35,12 @@
 // otherwise kept in a high-impedance state with pull-ups disabled to minimize power consumption.
 
 // ATTiny85 Pins
-//                ----------     
-//            PB5 | 1    8 | VCC  +3.3V
-//  DIP_PIN0  PB3 | 2    7 | PB2  TOUCH_PIN 
-//  DIP_PIN1  PB4 | 3    6 | PB1  PROD_PIN
-//       GND  GND | 4    5 | PB0	LED_PIN (LOW = ON) -> 300ohm resistor -> LED -> VCC
-//                ----------
+//                   ----------     
+//     (tie up)  PB5 | 1    8 | VCC  +3.3V
+//  DIP_MSB_PIN  PB3 | 2    7 | PB2  DIP_PIN_PROD (active LOW for prod mode, HIGH for debug)
+//  DIP_LSB_PIN  PB4 | 3    6 | PB1  TOUCH_PIN (TTP223 output)
+//          GND  GND | 4    5 | PB0	 LED_PIN (LOW = ON) -> 100ohm resistor -> LED -> VCC
+//                   ----------
 
 // Power Consumption Notes:
 // The ATTiny85 in this configuration draws approximately 0.3mA when the LED is off and the
@@ -55,25 +55,35 @@
 // The LED is currently running at around 10mA with no resistor, which is barely withig the 
 // recommended current for an ATTiny85 pin (20mA absolute max, but generally safer to stay 
 // below 5-10mA for longevity). To reduce the current and extend the life of the LED and the 
-// microcontroller, I'll add a 300 ohm resistor in series with the LED, which would drop the 
-// current to around 1.8mA for fresh batteries, dimming to about 750uA at 2.8V for depleated 
-// ones. This should provide enough light while significantly reducing power consumption and
-// increasing longevity. The LED draws 12mA in original circuit and out of it at 2.8V 
-// (used to represent a depleated battery voltage). 
+// microcontroller, I'll add a resistor in series with the LED, which would drop the current.  
+// 300 ohms drops the current to around 1mA for fresh batteries, and it's a little dim, so 
+// I'll try 100. This should provide enough light while significantly reducing power 
+// consumption and increasing longevity. The LED draws 12mA both in and out of the  original 
+// circuit at 2.8V (used to represent a depleated battery voltage). 
 
-// TEST MODE results for delay control pins: 
-// Pin 2/3 PB3/PB4
-//    00 - 8s (5s delay rounded up to 8s due to WDT granularity)
-//    01 - 24s (20s delay rounded up to 24s)
-//    10 - 16s (10s delay rounded up to 16s)
-//    11 - 40s (40s delay, which matches WDT ganularity so no rounding needed)
+// PIN Notes: 
+// I switched the pins around a little bit to make the PCB a little cleaner. We don't need the
+// hardware interrupt pin for this project since the touch sensor can trigger a pin change 
+// interrupt, so I'm using PB1 for the touch sensor and PB2 for the production mode DIP switch. 
 
-// Pin assignments
-const uint8_t LED_PIN = 0;      // PB0  
-const uint8_t PROD_PIN = 1;     // PB1
-const uint8_t TOUCH_PIN = 2;    // PB2 (TTP223)
-const uint8_t DIP_PIN0 = 3;     // PB3
-const uint8_t DIP_PIN1 = 4;     // PB4
+// DIP switch testing:  
+//   * 000 - 2min (5s delay rounded up to 8s due to WDT granularity)
+//   * 001 - 4min (10s delay rounded up to 16s)
+//   * 010 - 8min (20s delay rounded up to 24s)
+//   * 011 - 16min (40s delay, which matches WDT ganularity so no rounding needed)
+//   * 100 - 1hr
+//   * 101 - 2hr
+//   * 110 - 4hr
+//   * 111 - 8hr
+
+// DIP switch for configuration 
+const uint8_t DIP_MSB_PIN   = 4;  // PB4, Pin 3
+const uint8_t DIP_LSB_PIN   = 2;  // PB2, Pin 7
+const uint8_t DIP_HOUR_PIN  = 3;  // PB3, Pin 2 (active LOW for hours mode, HIGH for minutes mode)
+
+// Touch sensor and LED pins
+const uint8_t TOUCH_PIN     = 1;  // PB1 - Touch signal input 
+const uint8_t LED_PIN       = 0;  // PB0 - LED signal output (LOW = ON)
 
 // Timing
 volatile uint32_t sleepCounter = 0;
@@ -119,15 +129,15 @@ void setup() {
   digitalWrite(LED_PIN, HIGH); // HIGH to turn off since we're doing low-side switching
 
   // Disable unused modules to save power
-  ADCSRA &= ~(1 << ADEN); // Manually kill ADC
-  power_adc_disable();  // disable ADC clock
-  ACSR |= (1 << ACD); // Disable Analog Comparator
-  power_timer0_disable();   // Cut poeer to timer0
+  ADCSRA &= ~(1 << ADEN);   // manually kill ADC
+  power_adc_disable();      // disable ADC clock
+  ACSR |= (1 << ACD);       // misable analog comparator
+  power_timer0_disable();   // Cut power to timer0
   power_timer1_disable();   // Cut power to timer1
 
   // Configure touch pin change interrupt
   GIMSK |= (1 << PCIE);    // Enable pin change interrupts
-  PCMSK |= (1 << PCINT2);  // PB2, the touch pin, is allowed to wake us
+  PCMSK |= (1 << TOUCH_PIN);  // PB2, the touch pin, is allowed to wake us
 
   sei(); // enable interrupts
 }
@@ -150,35 +160,38 @@ void readDIP() {
 
   // Read DIP switches -- only need to do this when turning ON 
   DIDR0 &= ~((1 << ADC3D) | (1 << ADC2D)); // activate input buffers
-  pinMode(DIP_PIN0, INPUT_PULLUP);
-  pinMode(DIP_PIN1, INPUT_PULLUP);
-  pinMode(PROD_PIN, INPUT_PULLUP); // production mode by default
+  pinMode(DIP_MSB_PIN, INPUT_PULLUP);
+  pinMode(DIP_LSB_PIN, INPUT_PULLUP);
+  pinMode(DIP_HOUR_PIN, INPUT_PULLUP); // production mode by default
   _delay_us(50); // stabilize pins
   
-  uint8_t value = 0;
-  value |= digitalRead(DIP_PIN0) << 0;
-  value |= digitalRead(DIP_PIN1) << 1;
+  // Invert active low switches and combine into a single value
+  uint8_t bit0 = !digitalRead(DIP_LSB_PIN);
+  uint8_t bit1 = !digitalRead(DIP_MSB_PIN);
+  uint8_t value = (bit1 << 1) | bit0;
 
-  bool debugMode = !digitalRead(PROD_PIN);
+  // LOW (switch ON) = hours mode, HIGH/OFF = minutes mode
+  bool hoursMode = !digitalRead(DIP_HOUR_PIN); 
   
-  // Shut them back down immediately
-  PORTB &= ~((1 << PB3) | (1 << PB4) | (1 << PB1) );  // disable pull-ups
+  // Shut them back down immediately - disable pullups, input buffers, and set to High-Z 
+  // to save power since we only need to read them once when the LED turns on.
+  PORTB &= ~((1 << DIP_LSB_PIN) | (1 << DIP_MSB_PIN) | (1 << DIP_HOUR_PIN) );  // disable pull-ups
   DIDR0 |= (1 << ADC3D) | (1 << ADC2D); // disable input buffers
-  pinMode(DIP_PIN0, INPUT);                // back to High-Z
-  pinMode(DIP_PIN1, INPUT);
-  pinMode(PROD_PIN, INPUT);
+  pinMode(DIP_LSB_PIN, INPUT);          // back to High-Z
+  pinMode(DIP_MSB_PIN, INPUT);
+  pinMode(DIP_HOUR_PIN, INPUT);
 
-  // Convert DIP value to hours: 0b00=1h, 0b01=2h, 0b10=4h, 0b11=8h
+  // Convert DIP value to cycles: 0b00=1, 0b01=2, 0b10=4, 0b11=8
   /// ...and then to seconds based on DEBUG mode
-  uint8_t hours = 1 << value;
+  uint8_t units = 1 << value;
 
-  if (debugMode) {
-    // Directly use 5-sec increments instead of hours. These will be rounded up to the 
-    // nearest 8s in the main loop due to the WDT granularity.
-    maxSleepSeconds = hours * 5UL; 
+  if (hoursMode) {
+    maxSleepSeconds = units * 3600UL; // 1 hour per unit (1, 2, 4, 8 hours)
   }
   else {
-    maxSleepSeconds = hours * 3600UL; // normal hours
+    // Directly use minutes instead of hours. These will be rounded up to the 
+    // nearest 8s in the main loop due to the WDT granularity.
+    maxSleepSeconds = units * 120UL;  // 2 min per unit (2, 4, 8, 16 mins)
   }
 }
 
@@ -230,4 +243,3 @@ void loop() {
     }
   }
 }
-
