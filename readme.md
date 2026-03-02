@@ -53,12 +53,14 @@ CAD files will be linked here soon:
 | MCU Pin | Function |
 |---------|----------|
 | PB0     | LED Drive (low-side) |
-| PB1     | PROD Mode / Not Used |
-| PB2     | Touch Sensor (TTP223) |
+| PB1     | Touch Sensor (TTP223) |
+| PB2     | DIP Switch 2 |
 | PB3     | DIP Switch 0 |
 | PB4     | DIP Switch 1 |
 | VCC     | ~3 V Battery |
 | GND     | Ground |
+
+PROD Mode / Not Used
 
 The LED should be connected to VCC → current-limiting resistor → external LED → PB0 (MCU sinks current). This arrangement allows internal pull-ups to be used on the DIP and touch pins while keeping sleep current minimal.
 
@@ -96,7 +98,7 @@ Watchdog cycles are ~8 s per interrupt; total ON time is calculated accordingly.
 
 Switches on PB3, PB4 and PB2 (HOUR/MSB/LSB) select runtime:
 
-| DIP1 PB3 | DIP1 PB4 | DIP0 PB2 | Duration |
+| DIP0 PB3 | DIP1 PB4 | DIP2 PB2 | Duration |
 |----------|----------|----------|----------|
 | 0        | 0        | 0        | ~2 min  |
 | 0        | 0        | 1        | ~4 min |

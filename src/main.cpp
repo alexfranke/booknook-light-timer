@@ -36,10 +36,10 @@
 
 // ATTiny85 Pins
 //                   ----------     
-//     (tie up)  PB5 | 1    8 | VCC  +3.3V
-//  DIP_MSB_PIN  PB3 | 2    7 | PB2  DIP_PIN_PROD (active LOW for prod mode, HIGH for debug)
-//  DIP_LSB_PIN  PB4 | 3    6 | PB1  TOUCH_PIN (TTP223 output)
-//          GND  GND | 4    5 | PB0	 LED_PIN (LOW = ON) -> 100ohm resistor -> LED -> VCC
+//      (tie up)  PB5 | 1    8 | VCC  +3.3V
+//  DIP_HOUR_PIN  PB3 | 2    7 | PB2  DIP_LSB_PIN
+//   DIP_MSB_PIN  PB4 | 3    6 | PB1  TOUCH_PIN (TTP223 output)
+//           GND  GND | 4    5 | PB0	LED_PIN (LOW = ON) -> 100ohm resistor -> LED -> VCC
 //                   ----------
 
 // Power Consumption Notes:
@@ -77,9 +77,9 @@
 //   * 111 - 8hr
 
 // DIP switch for configuration 
+const uint8_t DIP_HOUR_PIN  = 3;  // PB3, Pin 2 (active LOW for hours mode, HIGH for minutes mode)
 const uint8_t DIP_MSB_PIN   = 4;  // PB4, Pin 3
 const uint8_t DIP_LSB_PIN   = 2;  // PB2, Pin 7
-const uint8_t DIP_HOUR_PIN  = 3;  // PB3, Pin 2 (active LOW for hours mode, HIGH for minutes mode)
 
 // Touch sensor and LED pins
 const uint8_t TOUCH_PIN     = 1;  // PB1 - Touch signal input 
