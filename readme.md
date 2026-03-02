@@ -1,0 +1,1 @@
+Book Nook Light Timer is an automated, energy-efficient lighting controller for miniature dioramas, designed for ATTiny85 microcontrollers. It features customizable "on" intervals, low-power operation, and support for simple wiring, enabling automated, timed illumination for small-scale projects.

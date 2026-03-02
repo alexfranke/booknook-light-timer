@@ -1,8 +1,8 @@
 // Project: BookNook Light Timer (v1-260210)
-// Author: Alex Franke (CodeCreations), http://www.theFrankes.com
+// Copyright (C)2026 Alex Franke (CodeCreations), http://www.theFrankes.com
 // Date: February 2026
-// License: CC-BY-NC-SA 4.0 https://creativecommons.org/licenses/by-nc-sa/4.0/deed.en
-
+// License: GPL-2.0-only
+ 
 #define F_CPU 1000000UL // clock speed 1MHz for delay.h
 
 #include <Arduino.h>
