@@ -42,7 +42,7 @@ The project includes Gerber files for a circuit design and a custom 3D-printable
 A custom 3D printable enclosure for this controller is in progress. Gerbers are in the hardware directory. 
 CAD files will be linked here soon:
 
-➡️ **Enclosure CAD:** _https://[coming_soon]_
+➡️ **Enclosure CAD:** [View on onshape.com](https://cad.onshape.com/documents/e6c41935a8714310abac5d71/w/07a6ea368ce5488f9fc5f154/e/c2979029d40b9fe7ec17d97d)
 
 ---
 
@@ -69,10 +69,10 @@ The LED should be connected to VCC → current-limiting resistor → external LE
 ## ⚡ Power Consumption
 
 - MCU in deepest sleep with LED off: ~4 µA
-- LED on with resistor: ~1.5–2 mA (typical)
+- LED on with resistor: ~2.9 mA (typical)
 - LED on without resistor (original design): ~10 mA — not ideal for long battery life.
 
-Using a **300 Ω resistor in series** with the LED allows around 1–2 mA draw, balancing brightness and longevity.
+Using a **68 Ω resistor in series** with the LED allows around 1–2 mA draw, balancing brightness and longevity.
 
 ---
 
