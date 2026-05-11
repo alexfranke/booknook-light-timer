@@ -16,7 +16,7 @@ The firmware is written in C++ for ATTiny85 and configured using PlatformIO.
 
 This project enhances traditional battery-powered diorama lighting (like book nooks) by replacing the original always-on / manual circuit with a microcontroller-based timer. When the touch sensor is tapped, the ATTiny85 wakes from sleep and toggles the LED. The LED automatically turns off after a duration set by DIP switches, maximizing battery life.
 
-The project includes GERBER files for a circuit design and a custom 3D-printable enclosure. For detailed build guides, background, and insights, check out the associated blog posts:
+The project includes Gerber files for a circuit design and a custom 3D-printable enclosure. For detailed build guides, background, and insights, check out the associated blog posts:
 
 - 🔧 **Design & Hardware Overview** — https://www.thefrankes.com/wp/?p=5019  
 - 💻 **Firmware Walkthrough & Timer Logic** — https://www.thefrankes.com/wp/?p=5023  
@@ -32,7 +32,7 @@ The project includes GERBER files for a circuit design and a custom 3D-printable
 - **DIP-selectable timer** — Four timer ranges from ~2 minutes to ~8 hours based on DIP switch positions.
 - **Low-power sleep mode** — ATTiny85 sleeps between events using watchdog timer wakes.
 - **Low-side switching** — LED is driven directly with a current limiting resistor to reduce current.
-- Simple BOM and wiring.
+- Simple BOM and wiring; through-hole, with easy DIY assembly.
 - Works on ~3 V battery supply.
 
 ---
