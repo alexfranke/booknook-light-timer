@@ -4,10 +4,12 @@
 // License: GPL-2.0-only
  
 #define F_CPU 1000000UL // clock speed 1MHz for delay.h
+#define WDIE 6  // Bit 6 in WDTCR for interrupt enable on ATtiny13Ait
 
 #include <Arduino.h>
 #include <avr/sleep.h>
-#include <avr/power.h>
+#include <avr/power.h> 
+#include <avr/io.h>
 #include <avr/interrupt.h>
 #include <avr/wdt.h>
 #include <util/atomic.h>
@@ -77,27 +79,48 @@
 //   * 111 - 8hr
 
 // DIP switch for configuration 
-const uint8_t DIP_HOUR_PIN  = 3;  // PB3, Pin 2 (active LOW for hours mode, HIGH for minutes mode)
-const uint8_t DIP_MSB_PIN   = 4;  // PB4, Pin 3
-const uint8_t DIP_LSB_PIN   = 2;  // PB2, Pin 7
+const uint8_t LED_PIN0 = 2;  // PB2 - 68
+const uint8_t LED_PIN1 = 3;  // PB3 - 150
+const uint8_t LED_PIN2 = 4;  // PB4 - 330
+
+// Level (0–7)	Original Binary	Pins ON	R_eff (Ω)	Relative brightness
+// 0	000	none	∞	0%
+// 1	100	PB2	330	12%
+// 2	010	PB1	150	27%
+// 3	110	PB1+PB2	103.1	39%
+// 4	001	PB0	68	60%
+// 5	101	PB0+PB2	56.4	72%
+// 6	011	PB0+PB1	46.8	87%
+// 7	111	PB0+PB1+PB2	41.0	91%
+// Map brightness level (0-7) to which pins should be ON
+const uint8_t brightnessPins[8] = {
+  0b000, // 0 = off
+  0b100, // 1
+  0b010, // 2
+  0b110, // 3
+  0b001, // 4
+  0b101, // 5
+  0b011, // 6
+  0b111  // 7 = brightest
+};
 
 // Touch sensor and LED pins
 const uint8_t TOUCH_PIN     = 1;  // PB1 - Touch signal input 
-const uint8_t LED_PIN       = 0;  // PB0 - LED signal output (LOW = ON)
 
 // Timing
-volatile uint32_t sleepCounter = 0;
+volatile uint32_t sleepTicks = 0;
 uint32_t maxSleepSeconds = 0;        // total sleep time in seconds (based on DIP)
 volatile bool touchEvent  = false;
 
-bool ledOn = false;
+volatile uint8_t ledLevel = 0;
+volatile bool ledOn = false;
 
 // Number of seconds per sleep cycle (adjusted for low power)
 const uint8_t SLEEP_SECONDS = 8; // normal 8s
 
 // Watchdog ISR
 ISR(WDT_vect) {
-  sleepCounter += SLEEP_SECONDS;
+  sleepTicks++; // 8sec tick
 }
 
 // Touch ISR
@@ -120,26 +143,49 @@ ISR(PCINT0_vect) {
   }
 }
 
+void setLEDBrightness(uint8_t level) {
+  if (level > 7) level = 7;
+
+  uint8_t pins = brightnessPins[level];
+
+  digitalWrite(LED_PIN0, (pins & 0b001) ? LOW : HIGH);
+  digitalWrite(LED_PIN1, (pins & 0b010) ? LOW : HIGH);
+  digitalWrite(LED_PIN2, (pins & 0b100) ? LOW : HIGH);
+}
+
 void setup() {
   // Set up PIN modes 
-  pinMode(LED_PIN, OUTPUT);
   pinMode(TOUCH_PIN, INPUT);
+  pinMode(LED_PIN0, OUTPUT);
+  pinMode(LED_PIN1, OUTPUT);
+  pinMode(LED_PIN2, OUTPUT);
 
-  // Set LED off initially
-  digitalWrite(LED_PIN, HIGH); // HIGH to turn off since we're doing low-side switching
+  // Set all LED pins off initially (HIGH = off for low-side)
+  setLEDBrightness(0);
 
   // Disable unused modules to save power
   ADCSRA &= ~(1 << ADEN);   // manually kill ADC
   power_adc_disable();      // disable ADC clock
   ACSR |= (1 << ACD);       // misable analog comparator
   power_timer0_disable();   // Cut power to timer0
-  power_timer1_disable();   // Cut power to timer1
+  //power_timer1_disable();   // Cut power to timer1
+  power_all_disable();
 
   // Configure touch pin change interrupt
   GIMSK |= (1 << PCIE);    // Enable pin change interrupts
   PCMSK |= (1 << TOUCH_PIN);  // PB2, the touch pin, is allowed to wake us
 
   sei(); // enable interrupts
+}
+
+void setupWDT_8s() {
+  MCUSR &= ~(1 << WDRF);
+
+  // timed sequence required
+  WDTCR |= (1 << WDCE) | (1 << WDE);
+
+  // 8s interrupt mode (ATtiny13A: WDP3 + WDP0)
+  WDTCR = (1 << WDIE) | (1 << WDP3) | (1 << WDP0);
 }
 
 void sleep() {
@@ -155,91 +201,222 @@ void sleep() {
   sleep_disable(); // Just woke up 
 }
 
-// Read DIP switches for sleep time
-void readDIP() {
+bool detectLongPress() {
+  const uint32_t LONG_PRESS_MS = 5000;
+  uint32_t startTime = millis();
 
-  // Read DIP switches -- only need to do this when turning ON 
-  DIDR0 &= ~((1 << ADC3D) | (1 << ADC2D)); // activate input buffers
-  pinMode(DIP_MSB_PIN, INPUT_PULLUP);
-  pinMode(DIP_LSB_PIN, INPUT_PULLUP);
-  pinMode(DIP_HOUR_PIN, INPUT_PULLUP); // production mode by default
-  _delay_us(50); // stabilize pins
-  
-  // Invert active low switches and combine into a single value
-  uint8_t bit0 = !digitalRead(DIP_LSB_PIN);
-  uint8_t bit1 = !digitalRead(DIP_MSB_PIN);
-  uint8_t value = (bit1 << 1) | bit0;
-
-  // LOW (switch ON) = hours mode, HIGH/OFF = minutes mode
-  bool hoursMode = !digitalRead(DIP_HOUR_PIN); 
-  
-  // Shut them back down immediately - disable pullups, input buffers, and set to High-Z 
-  // to save power since we only need to read them once when the LED turns on.
-  PORTB &= ~((1 << DIP_LSB_PIN) | (1 << DIP_MSB_PIN) | (1 << DIP_HOUR_PIN) );  // disable pull-ups
-  DIDR0 |= (1 << ADC3D) | (1 << ADC2D); // disable input buffers
-  pinMode(DIP_LSB_PIN, INPUT);          // back to High-Z
-  pinMode(DIP_MSB_PIN, INPUT);
-  pinMode(DIP_HOUR_PIN, INPUT);
-
-  // Convert DIP value to cycles: 0b00=1, 0b01=2, 0b10=4, 0b11=8
-  /// ...and then to seconds based on DEBUG mode
-  uint8_t units = 1 << value;
-
-  if (hoursMode) {
-    maxSleepSeconds = units * 3600UL; // 1 hour per unit (1, 2, 4, 8 hours)
+  while (!(PINB & (1 << TOUCH_PIN))) { // LOW = touched
+    if (millis() - startTime >= LONG_PRESS_MS) return true;
+    sleep(); // ultra-low power sleep while holding
   }
-  else {
-    // Directly use minutes instead of hours. These will be rounded up to the 
-    // nearest 8s in the main loop due to the WDT granularity.
-    maxSleepSeconds = units * 120UL;  // 2 min per unit (2, 4, 8, 16 mins)
+  return false;
+}
+
+bool longPressDetected() {
+  const uint32_t THRESH = 5; // seconds (WDT ticks = 8s, so we approximate)
+
+  uint32_t start = sleepTicks;
+
+  while (!(PINB & (1 << TOUCH_PIN))) {
+    sleep(); // sleep while held
+
+    if ((sleepTicks - start) >= THRESH) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const uint32_t durations[] = {
+  1800,   // 30 min
+  3600,   // 1 hr
+  5400,   // 1:30
+  7200,   // 2 hr
+  14400,  // 4 hr
+  28800   // 8 hr
+};
+volatile uint8_t durationIndex = 0;
+volatile uint32_t maxSeconds = 0;
+uint8_t selected = 0;
+
+void configMode() {
+  durationIndex = 0;
+
+  while (true) {
+
+    // wait for tap
+    while (PINB & (1 << TOUCH_PIN)) {
+      sleep();
+    }
+
+    _delay_ms(30); // debounce
+
+    // advance option
+    durationIndex++;
+    if (durationIndex >= (sizeof(durations) / sizeof(durations[0]))) {
+      durationIndex = 0;
+    }
+
+    maxSeconds = durations[durationIndex];
+
+    // visual feedback (blinks)
+    for (uint8_t i = 0; i <= durationIndex; i++) {
+      setLEDBrightness(7);
+      _delay_ms(150);
+      setLEDBrightness(0);
+      _delay_ms(150);
+    }
+
+    // exit condition: long press again
+    if (longPressDetected()) {
+      break;
+    }
   }
 }
 
+// void enterConfigMode() {
+//   while (true) {
+//     // Wait for tap
+//     while (PINB & (1 << TOUCH_PIN)) sleep(); // wait until touch LOW
+//     _delay_ms(50); // debounce
+//     if (!(PINB & (1 << TOUCH_PIN))) {
+//       // tap detected
+//       selected = (selected + 1) % (sizeof(durations)/sizeof(durations[0]));
+
+//       // Indicate selection via LED blinks
+//       for (uint8_t i = 0; i <= selected; i++) {
+//         setLEDBrightness(7);   // max brightness for blink
+//         _delay_ms(200);
+//         setLEDBrightness(0);   // off
+//         _delay_ms(200);
+//       }
+//     }
+
+//     // Long-press exit or timeout could be added
+//   }
+// }
+
+
+// // Read DIP switches for sleep time
+// void readDIP() {
+
+//   // Read DIP switches -- only need to do this when turning ON 
+//   DIDR0 &= ~((1 << ADC3D) | (1 << ADC2D)); // activate input buffers
+//   pinMode(DIP_MSB_PIN, INPUT_PULLUP);
+//   pinMode(DIP_LSB_PIN, INPUT_PULLUP);
+//   pinMode(DIP_HOUR_PIN, INPUT_PULLUP); // production mode by default
+//   _delay_us(50); // stabilize pins
+  
+//   // Invert active low switches and combine into a single value
+//   uint8_t bit0 = !digitalRead(DIP_LSB_PIN);
+//   uint8_t bit1 = !digitalRead(DIP_MSB_PIN);
+//   uint8_t value = (bit1 << 1) | bit0;
+
+//   // LOW (switch ON) = hours mode, HIGH/OFF = minutes mode
+//   bool hoursMode = !digitalRead(DIP_HOUR_PIN); 
+  
+//   // Shut them back down immediately - disable pullups, input buffers, and set to High-Z 
+//   // to save power since we only need to read them once when the LED turns on.
+//   PORTB &= ~((1 << DIP_LSB_PIN) | (1 << DIP_MSB_PIN) | (1 << DIP_HOUR_PIN) );  // disable pull-ups
+//   DIDR0 |= (1 << ADC3D) | (1 << ADC2D); // disable input buffers
+//   pinMode(DIP_LSB_PIN, INPUT);          // back to High-Z
+//   pinMode(DIP_MSB_PIN, INPUT);
+//   pinMode(DIP_HOUR_PIN, INPUT);
+
+//   // Convert DIP value to cycles: 0b00=1, 0b01=2, 0b10=4, 0b11=8
+//   /// ...and then to seconds based on DEBUG mode
+//   uint8_t units = 1 << value;
+
+//   if (hoursMode) {
+//     maxSleepSeconds = units * 3600UL; // 1 hour per unit (1, 2, 4, 8 hours)
+//   }
+//   else {
+//     // Directly use minutes instead of hours. These will be rounded up to the 
+//     // nearest 8s in the main loop due to the WDT granularity.
+//     maxSleepSeconds = units * 120UL;  // 2 min per unit (2, 4, 8, 16 mins)
+//   }
+// }
+
+// void loop() {
+//   // Check for touch to toggle LED
+//   if (touchEvent) {
+//     touchEvent = false; 
+//     ledOn = !ledOn;
+
+//     if (ledOn) {
+
+//       // Canculate LED ON time based on DIP switches
+//       readDIP(); 
+
+//       // Start the Watchdog timer -- this only needs to be running when the LED is ON
+//       // ALso reset sleep counter and turn on LED
+//       sleepTicks = 0;
+//       MCUSR &= ~(1 << WDRF);
+//       WDTCR |= (1 << WDCE) | (1 << WDE);
+//       WDTCR = (1 << WDIE) | (1 << WDP3) | (1 << WDP0);
+
+//       // actually turn on LED
+//       digitalWrite(LED_PIN, LOW); // LOW to turn on since we're doing low-side switching
+
+//     } else {
+//       // User manually toggled OFF, so shut down WDT and turn off LED
+//       digitalWrite(LED_PIN, HIGH); // HIGH to turn off since we're doing low-side switching
+//       wdt_disable();
+//     }
+//   }
+
+//   sleep();  // go to sleep
+
+//   if ( ledOn ) {
+//     uint32_t counterCopy;
+//     ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+//       counterCopy = sleepCounter;
+//     }
+
+//     if (counterCopy >= maxSleepSeconds) {
+//       ledOn = false;
+//       digitalWrite(LED_PIN, HIGH); // HIGH to turn off since we're doing low-side switching
+//       wdt_disable(); // fully disable WDT to save power while LEDis off 
+//     }
+//     else {
+//       // Re-enable WDT interrupt for the next 8s cycle -- necessary because the WDT 
+//       // interrupt bit often clears itself
+//       WDTCR |= (1 << WDCE) | (1 << WDIE); 
+//     }
+//   }
+// }
+
 void loop() {
-  // Check for touch to toggle LED
-  if (touchEvent) {
-    touchEvent = false; 
+
+  // ---- WAKE / TOUCH ----
+  if (PINB & (1 << TOUCH_PIN)) {
+
+    // long press = config mode
+    if (longPressDetected()) {
+      configMode();
+      return;
+    }
+
+    // toggle LED
     ledOn = !ledOn;
 
     if (ledOn) {
-
-      // Canculate LED ON time based on DIP switches
-      readDIP(); 
-
-      // Start the Watchdog timer -- this only needs to be running when the LED is ON
-      // ALso reset sleep counter and turn on LED
-      sleepCounter = 0;
-      MCUSR &= ~(1 << WDRF);
-      WDTCR |= (1 << WDCE) | (1 << WDE);
-      WDTCR = (1 << WDIE) | (1 << WDP3) | (1 << WDP0);
-
-      // actually turn on LED
-      digitalWrite(LED_PIN, LOW); // LOW to turn on since we're doing low-side switching
-
+      sleepTicks = 0;
+      setupWDT_8s();
+      setLEDBrightness(ledLevel);
     } else {
-      // User manually toggled OFF, so shut down WDT and turn off LED
-      digitalWrite(LED_PIN, HIGH); // HIGH to turn off since we're doing low-side switching
+      setLEDBrightness(0);
       wdt_disable();
     }
   }
 
-  sleep();  // go to sleep
+  // ---- SLEEP ----
+  sleep();
 
-  if ( ledOn ) {
-    uint32_t counterCopy;
-    ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-      counterCopy = sleepCounter;
-    }
-
-    if (counterCopy >= maxSleepSeconds) {
-      ledOn = false;
-      digitalWrite(LED_PIN, HIGH); // HIGH to turn off since we're doing low-side switching
-      wdt_disable(); // fully disable WDT to save power while LEDis off 
-    }
-    else {
-      // Re-enable WDT interrupt for the next 8s cycle -- necessary because the WDT 
-      // interrupt bit often clears itself
-      WDTCR |= (1 << WDCE) | (1 << WDIE); 
-    }
+  // ---- TIME CHECK ----
+  if (ledOn && (sleepTicks * 8 >= maxSeconds)) {
+    ledOn = false;
+    setLEDBrightness(0);
+    wdt_disable();
   }
 }
